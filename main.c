@@ -1,3 +1,4 @@
+
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/stat.h>
@@ -8,9 +9,10 @@
 const int MEMORY_SIZE = 4096;
 int inputArraySize = 0;
 
-void errormsg( char *msg ) {
-   perror( msg );
-   exit( 1 );
+void errormsg(char *msg)
+{
+    perror(msg);
+    exit(1);
 }
 
 int checkInputNumberMatches(FILE *file, int numElements, int **arr)
@@ -22,7 +24,7 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
     while (fscanf(file, "%d", &num) != EOF)
     {
         numsInFile++;
-        
+
         // If they differ, exit program
         if (numsInFile > numElements)
         {
@@ -30,33 +32,38 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
             printf("Number of elements in file is greater than number of elements user specified\n");
             return 0;
         }
-        //Read the number into the array
-        else{    
+        // Read the number into the array
+        else
+        {
             inputArraySize++;
 
-            //Initial array allocation to store one elemenet
-            if(numsInFile == 1){
+            // Initial array allocation to store one elemenet
+            if (numsInFile == 1)
+            {
                 *arr = (int *)malloc(1 * sizeof(int));
-                //Check if memory allocation failed
-                if(*arr == NULL) {
+                // Check if memory allocation failed
+                if (*arr == NULL)
+                {
                     printf("Memory allocation failed.\n");
                     return 0;
                 }
             }
-            //As we read more numbers from the file, grow our array by one each time
-            else{
+            // As we read more numbers from the file, grow our array by one each time
+            else
+            {
                 *arr = (int *)realloc(*arr, numsInFile * sizeof(int));
-                //Check if memory allocation failed
-                if(*arr == NULL) {
+                // Check if memory allocation failed
+                if (*arr == NULL)
+                {
                     printf("Memory allocation failed.\n");
                     return 0;
                 }
             }
-            //Store the number into the array
+            // Store the number into the array
             (*arr)[numsInFile - 1] = num;
         }
     }
-    
+
     // If they differ, exit program
     if (numsInFile != numElements)
     {
@@ -68,9 +75,15 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
     return numsInFile;
 }
 
-void spawnProcesses(int numCores, pid_t pidOfRoot)
+void spawnProcesses(int numCores, pid_t pidOfRoot, int *startIndex, int *endIndex, int *coreIDNum)
 {
     int i;
+    int coreNum = 0;
+    // Divide the input array based on the number of cores and array size
+    // Use curIndex to specify where it starts and range to specify where it ends
+    int curIndex = 0;
+    int range;
+
     // Run the loop m times to create all the child cores
     for (i = 0; i < numCores; i++)
     {
@@ -85,9 +98,11 @@ void spawnProcesses(int numCores, pid_t pidOfRoot)
                 printf("Problem with forking. Terminating\n");
                 exit(EXIT_FAILURE);
             }
-            // If we are the child process, exit the for loop
+            // If we are the child process, assign it the id number and then exit
             else if (forkID == 0)
             {
+                coreIDNum = coreNum;
+                coreNum++;
                 printf("Child created");
                 return;
             }
@@ -99,14 +114,16 @@ void spawnProcesses(int numCores, pid_t pidOfRoot)
 int main()
 {
 
-    // int segment_id;
+    int segment_id;
+    int *shared_array;
 
-    // // create a memory segment to be shared
-    // segment_id = shmget( IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR );
+    // create a memory segment to be shared
+    segment_id = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
 
-    // if ( segment_id < 0 ) errormsg( "ERROR in creating a shared memory segment\n" );
+    if (segment_id < 0)
+        errormsg("ERROR in creating a shared memory segment\n");
 
-    // fprintf( stdout, "Segment id = %d\n", segment_id );
+    fprintf(stdout, "Segment id = %d\n", segment_id);
 
     // Must make sure value is greater than zero
     int numElements;
@@ -114,7 +131,7 @@ int main()
     {
         printf("Enter number of elements in the input array: ");
         scanf("%d", &numElements);
-        if(numElements > 0)
+        if (numElements > 0)
         {
             break;
         }
@@ -161,28 +178,50 @@ int main()
     }
 
     // Check if the input number matches the number of elements in the file and write the elements into the array
-    //Our array will have to be dynamic and grow based on size of input file
+    // Our array will have to be dynamic and grow based on size of input file
     int *inputArray;
     int numElementsInFile = checkInputNumberMatches(file, numElements, &inputArray);
 
-    //Exit program if we have invalid number of elements
-    if (numElementsInFile == 0){return 1;}
-    //If we have more cores then elements in the file, trim down the number of cores
-    else if(numElementsInFile < numCores){numCores = numElementsInFile;}
+    // Exit program if we have invalid number of elements
+    if (numElementsInFile == 0)
+    {
+        return 1;
+    }
+    // If we have more cores then elements in the file, trim down the number of cores
+    else if (numElementsInFile < numCores)
+    {
+        numCores = numElementsInFile;
+    }
+
+    // copy our input array to the shared array
+    shared_array = (int *)shmat(segment_id, NULL, 0);
+    memcpy(shared_array, inputArray, inputArraySize * sizeof(int));
 
     // int j = 0;
     // for(j = 0; j < inputArraySize; j++){
-    //     printf("%d", inputArray[j]);
+    //     printf("%d", shared_array[j]);
     // }
-    //Create a barrier for m amount of cores
+
+    // Create a barrier for m amount of cores
     int barrier[numCores];
     int i;
-    for(i = 0; i < numCores; i++){
+    for (i = 0; i < numCores; i++)
+    {
         barrier[i] == 0;
     }
     // // If we reach here, we are ready to begin
     pid_t pidOfRoot = getpid();
-    spawnProcesses(numCores, pidOfRoot);
 
-    //Once the children cores are created, they can start working on the array right away
+    // When we spawn the child processes, we will assign each core an id number and a range to work in for the output array
+    int startIndex;
+    int endIndex;
+    int coreIDNum; // Used to modify its value in the barrier
+    spawnProcesses(numCores, pidOfRoot, &startIndex, &endIndex, &coreIDNum);
+
+    // Once the children cores are created, they can start working on the array right away
+
+    // Parent will divide up the work first
+
+    // mark the shared memory segment for destruction
+    shmctl(segment_id, IPC_RMID, NULL);
 }
