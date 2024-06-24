@@ -75,16 +75,82 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
     return numsInFile;
 }
 
-void spawnProcesses(int numCores, pid_t pidOfRoot, int *startIndex, int *endIndex, int *coreIDNum)
+void parentBarrier(int *shared_array, int *updated_array, int *barrier_array, int numCores){
+
+    //Perfom the barrier checking here  
+    //Continuously loop through the barrier and see if there are any zeroes
+    int currentIteration = 0;
+
+
+    while(1){
+
+
+        //When barrier should now be lifted
+        //If we reach here, that means we detected no zeroes in our barrier which means child processes are ready to go on
+        if(currentIteration == numCores){
+            //First copy the iterated array over to the shared_array so children processes have right values to work with
+            memcpy(shared_array, updated_array, inputArraySize * sizeof(int));
+            //Then, reset the barrier values to let children exit the loop and continue execution
+            int i = 0;
+            for(i; i < numCores; i++){
+                barrier_array[i] = 0;
+            }
+
+            //Allow children to move onto next iteration, maybe via signal
+        }
+        
+        //This should be always running to check the barriers
+        if(barrier_array[currentIteration] != 0){
+            currentIteration++;
+        }
+        else{
+            currentIteration = 0;
+        }
+
+    }
+    
+
+    
+}
+
+void compute(int idCore, int *shared_array, int numCores, int *updated_array, int *barrier_array)
 {
     int i;
-    int coreNum = 0;
-    // Divide the input array based on the number of cores and array size
-    // Use curIndex to specify where it starts and range to specify where it ends
-    int curIndex = 0;
-    int range;
+    // i*=2 to determine the space between neighbor
+    for (i = 1; i < inputArraySize; i *= 2)
+    { // i will be 1, 2, 4, 8, 16, ...
+    //inputArraySize - i will be the amount of computations needed to be done for the current iteration
+    //if numCores > (inputArraySize - i), then idCore >= (inputArraySize - i), then that core will drop out since the cores before it will only be used
+
+    //Check if we have less cores than computations
+
+        //If we have more cores then computations needed
+        if (numCores >= (inputArraySize - i)){
+            //Ensures that only the cores needed perform the computation (atmost amount of cores is inputArraySize - i)
+            if ((idCore ) < (inputArraySize - i))
+            {
+                // Take the current index needed to be computed and add the required previous index to it
+                updated_array[idCore + i] += shared_array[idCore];
+            }
+            
+        }
+        //If we have less cores than computations needed
+        else if(numCores < (inputArraySize - i)){
+            //Will need to divide the work up between cores
+
+        }
+        //Send the core to the waiting room
+
+
+        // Wait for all other cores to finish before going again
+    }
+}
+
+void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updated_array, int *barrier_array)
+{
 
     // Run the loop m times to create all the child cores
+    int i;
     for (i = 0; i < numCores; i++)
     {
         // This ensures that only the root pid is creating the processes
@@ -98,32 +164,22 @@ void spawnProcesses(int numCores, pid_t pidOfRoot, int *startIndex, int *endInde
                 printf("Problem with forking. Terminating\n");
                 exit(EXIT_FAILURE);
             }
-            // If we are the child process, assign it the id number and then exit
+            // If we are the child process,
             else if (forkID == 0)
             {
-                coreIDNum = coreNum;
-                coreNum++;
-                printf("Child created");
-                return;
+                // start the computation and assign it the index for its spot in the array
+                compute(i, shared_array, numCores, updated_array, barrier_array);
+                exit(0);
             }
         }
     }
-    printf("Parent finished");
+
+    //When all children get done being made, parent will go to its barrier
+    parentBarrier(shared_array, updated_array, barrier_array, numCores);
 }
 
 int main()
 {
-
-    int segment_id;
-    int *shared_array;
-
-    // create a memory segment to be shared
-    segment_id = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
-
-    if (segment_id < 0)
-        errormsg("ERROR in creating a shared memory segment\n");
-
-    fprintf(stdout, "Segment id = %d\n", segment_id);
 
     // Must make sure value is greater than zero
     int numElements;
@@ -193,14 +249,16 @@ int main()
         numCores = numElementsInFile;
     }
 
-    // copy our input array to the shared array
-    shared_array = (int *)shmat(segment_id, NULL, 0);
-    memcpy(shared_array, inputArray, inputArraySize * sizeof(int));
+    int segment_id;
+    int *shared_array;
 
-    // int j = 0;
-    // for(j = 0; j < inputArraySize; j++){
-    //     printf("%d", shared_array[j]);
-    // }
+    // create a memory segment to be shared
+    segment_id = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
+
+    if (segment_id < 0)
+        errormsg("ERROR in creating a shared memory segment\n");
+
+    fprintf(stdout, "Segment id = %d\n", segment_id);
 
     // Create a barrier for m amount of cores
     int barrier[numCores];
@@ -209,19 +267,28 @@ int main()
     {
         barrier[i] == 0;
     }
+
+    // copy our input array to the shared array
+    shared_array = (int *)shmat(segment_id, NULL, 0);
+    memcpy(shared_array, inputArray, inputArraySize * sizeof(int));
+
+    // Use this array to store the values after each iteration
+    updated_array = (int *)shmat(segment_id, NULL, 0);
+    memcpy(updated_array, inputArray, inputArraySize * sizeof(int));
+
+    //Create our barrier array 
+    barrier_array = (int *)shmat(segment_id, NULL, 0);
+    memcpy(barrier_array, barrier, inputArraySize * sizeof(int));
+
+
     // // If we reach here, we are ready to begin
     pid_t pidOfRoot = getpid();
 
-    // When we spawn the child processes, we will assign each core an id number and a range to work in for the output array
-    int startIndex;
-    int endIndex;
-    int coreIDNum; // Used to modify its value in the barrier
-    spawnProcesses(numCores, pidOfRoot, &startIndex, &endIndex, &coreIDNum);
-
-    // Once the children cores are created, they can start working on the array right away
-
-    // Parent will divide up the work first
+    // Spawn the processes
+    spawnProcesses(numCores, pidOfRoot, shared_array, updated_array, barrier_array);
 
     // mark the shared memory segment for destruction
+    shmdt(shared_array);
+    shmdt(updated_array);
     shmctl(segment_id, IPC_RMID, NULL);
 }
