@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <signal.h>
+#include <unistd.h>
 
 const int MEMORY_SIZE = 4096;
 int inputArraySize = 0;
@@ -75,6 +77,17 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
     return numsInFile;
 }
 
+void arriveAndWait(int idCore, int *barrier_array){
+
+    //set spot in barrier to 1
+    barrier_array[idCore] = 1;
+
+    //Wait for parent to give signal to continue
+    //signal(SIGUSR1, SIG_IGN);
+    //pause();
+    usleep(1000000);
+}
+
 void parentBarrier(int *shared_array, int *updated_array, int *barrier_array, int numCores){
 
     //Perfom the barrier checking here  
@@ -84,33 +97,37 @@ void parentBarrier(int *shared_array, int *updated_array, int *barrier_array, in
 
     while(1){
 
-
         //When barrier should now be lifted
         //If we reach here, that means we detected no zeroes in our barrier which means child processes are ready to go on
         if(currentIteration == numCores){
             //First copy the iterated array over to the shared_array so children processes have right values to work with
+            int j = 0;
+            for(j; j < 5; j++){
+                printf("up: %d\n", updated_array[j]);
+            }
             memcpy(shared_array, updated_array, inputArraySize * sizeof(int));
             //Then, reset the barrier values to let children exit the loop and continue execution
             int i = 0;
             for(i; i < numCores; i++){
                 barrier_array[i] = 0;
             }
-
+            currentIteration = 0;
             //Allow children to move onto next iteration, maybe via signal
+            //kill(getpid(), SIGUSR1);  // Send SIGUSR1 signal to child
         }
         
         //This should be always running to check the barriers
-        if(barrier_array[currentIteration] != 0){
+        if(barrier_array[currentIteration] == 1){   //If current index value is 1, it means that child completed its work
             currentIteration++;
+        }
+        //If any value = 2, it means we are finished
+        else if(barrier_array[currentIteration] == 2){
+            break;  //exit function
         }
         else{
             currentIteration = 0;
         }
-
     }
-    
-
-    
 }
 
 void compute(int idCore, int *shared_array, int numCores, int *updated_array, int *barrier_array)
@@ -130,7 +147,7 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
             if ((idCore ) < (inputArraySize - i))
             {
                 // Take the current index needed to be computed and add the required previous index to it
-                updated_array[idCore + i] += shared_array[idCore];
+                updated_array[idCore + i] = shared_array[idCore] + shared_array[idCore + i];
             }
             
         }
@@ -140,10 +157,14 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
 
         }
         //Send the core to the waiting room
-
+        arriveAndWait(idCore, barrier_array);
 
         // Wait for all other cores to finish before going again
     }
+    //If we are here, that means the child process has exited and completed its work
+    //Set to 2 to let parent know we are finished and then exit
+    barrier_array[idCore] = 2;
+
 }
 
 void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updated_array, int *barrier_array)
@@ -176,6 +197,9 @@ void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updat
 
     //When all children get done being made, parent will go to its barrier
     parentBarrier(shared_array, updated_array, barrier_array, numCores);
+
+    //When parent gets here, reap the children, then exit function
+    usleep(10000);
 }
 
 int main()
@@ -249,17 +273,6 @@ int main()
         numCores = numElementsInFile;
     }
 
-    int segment_id;
-    int *shared_array;
-
-    // create a memory segment to be shared
-    segment_id = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
-
-    if (segment_id < 0)
-        errormsg("ERROR in creating a shared memory segment\n");
-
-    fprintf(stdout, "Segment id = %d\n", segment_id);
-
     // Create a barrier for m amount of cores
     int barrier[numCores];
     int i;
@@ -268,27 +281,55 @@ int main()
         barrier[i] == 0;
     }
 
+
+    int *shared_array;
+    int *updated_array;
+    int *barrier_array;
+    // create a memory segment to be shared
+    int segment_idOne = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
+    int segment_idTwo = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
+    int segment_idThree = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
+    if (segment_idOne < 0 || segment_idTwo < 0 || segment_idThree < 0) 
+        errormsg("ERROR in creating a shared memory segment\n");
+
+//    fprintf(stdout, "Segment id = %d\n", segment_id);
+
+
     // copy our input array to the shared array
-    shared_array = (int *)shmat(segment_id, NULL, 0);
+    shared_array = (int *)shmat(segment_idOne, NULL, 0);
     memcpy(shared_array, inputArray, inputArraySize * sizeof(int));
 
     // Use this array to store the values after each iteration
-    updated_array = (int *)shmat(segment_id, NULL, 0);
+    updated_array = (int *)shmat(segment_idTwo, NULL, 0);
     memcpy(updated_array, inputArray, inputArraySize * sizeof(int));
 
     //Create our barrier array 
-    barrier_array = (int *)shmat(segment_id, NULL, 0);
-    memcpy(barrier_array, barrier, inputArraySize * sizeof(int));
+    barrier_array = (int *)shmat(segment_idThree, NULL, 0);
+    memcpy(barrier_array, barrier, numCores * sizeof(int));
 
 
-    // // If we reach here, we are ready to begin
+    // If we reach here, we are ready to begin
     pid_t pidOfRoot = getpid();
+    printf("Parent PID: %d\n", pidOfRoot);
+    int j = 0;
+    for(j; j < inputArraySize; j++){
+        printf("%d\n", barrier[j]);
+    }
 
     // Spawn the processes
     spawnProcesses(numCores, pidOfRoot, shared_array, updated_array, barrier_array);
+    j = 0;
+    for(j; j < inputArraySize; j++){
+        printf("%d\n", shared_array[j]);
+    }
 
     // mark the shared memory segment for destruction
     shmdt(shared_array);
     shmdt(updated_array);
-    shmctl(segment_id, IPC_RMID, NULL);
+    shmdt(barrier_array);
+    shmctl(segment_idOne, IPC_RMID, NULL);
+    shmctl(segment_idTwo, IPC_RMID, NULL);
+    shmctl(segment_idThree, IPC_RMID, NULL);
+
+    return 0;
 }
