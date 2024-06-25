@@ -8,7 +8,6 @@
 #include <signal.h>
 #include <unistd.h>
 
-const int MEMORY_SIZE = 4096;
 int inputArraySize = 0;
 
 void errormsg(char *msg)
@@ -77,57 +76,58 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
     return numsInFile;
 }
 
-void arriveAndWait(int idCore, int *barrier_array){
+void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, int numCores, int idCore){
 
     //set spot in barrier to 1
     barrier_array[idCore] = 1;
 
-    //Wait for parent to give signal to continue
-    //signal(SIGUSR1, SIG_IGN);
-    //pause();
-    usleep(1000000);
-}
+    //Let our first core take care of barrier checking
+    if(idCore == 0){
+        //Perfom the barrier checking here  
+        //Continuously loop through the barrier and see if there are any zeroes
+        int currentIteration = 0;
 
-void parentBarrier(int *shared_array, int *updated_array, int *barrier_array, int numCores){
+        while(1){
 
-    //Perfom the barrier checking here  
-    //Continuously loop through the barrier and see if there are any zeroes
-    int currentIteration = 0;
+            //When barrier should now be lifted
+            //If we reach here, that means we detected no zeroes in our barrier which means child processes are ready to go on
+            if(currentIteration == numCores){
 
-
-    while(1){
-
-        //When barrier should now be lifted
-        //If we reach here, that means we detected no zeroes in our barrier which means child processes are ready to go on
-        if(currentIteration == numCores){
-            //First copy the iterated array over to the shared_array so children processes have right values to work with
-            int j = 0;
-            for(j; j < 5; j++){
-                printf("up: %d\n", updated_array[j]);
+                //First copy the iterated array over to the shared_array so children processes have right values to work with
+                memcpy(shared_array, updated_array, inputArraySize * sizeof(int));
+                //Then, reset the barrier values to let children exit the loop and continue execution
+                int i = 0;
+                for(i; i < numCores; i++){
+                    barrier_array[i] = 0;
+                }
+                currentIteration = 0;
+                //Allow children to move onto next iteration
+                break;
             }
-            memcpy(shared_array, updated_array, inputArraySize * sizeof(int));
-            //Then, reset the barrier values to let children exit the loop and continue execution
-            int i = 0;
-            for(i; i < numCores; i++){
-                barrier_array[i] = 0;
+            
+            //This should be always running to check the barriers
+            if(barrier_array[currentIteration] == 1){   //If current index value is 1, it means that child completed its work
+                currentIteration++;
             }
-            currentIteration = 0;
-            //Allow children to move onto next iteration, maybe via signal
-            //kill(getpid(), SIGUSR1);  // Send SIGUSR1 signal to child
-        }
-        
-        //This should be always running to check the barriers
-        if(barrier_array[currentIteration] == 1){   //If current index value is 1, it means that child completed its work
-            currentIteration++;
-        }
-        //If any value = 2, it means we are finished
-        else if(barrier_array[currentIteration] == 2){
-            break;  //exit function
-        }
-        else{
-            currentIteration = 0;
+            //If any value = 2, it means we are finished
+            else if(barrier_array[currentIteration] == 2){
+                break;  //exit function
+            }
+            else{
+                currentIteration = 0;
+            }
         }
     }
+    //If we are not core zero, we will wait here until we are free to go
+    else{
+        while(1){
+            //We will continue to loop until we get our barrier index set back to zero (it means core zero was in the process of resetting the array meaning we are good to go)
+            if(barrier_array[idCore] == 0){
+                break;
+            }
+        }
+    }
+
 }
 
 void compute(int idCore, int *shared_array, int numCores, int *updated_array, int *barrier_array)
@@ -157,7 +157,7 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
 
         }
         //Send the core to the waiting room
-        arriveAndWait(idCore, barrier_array);
+        arriveAndWait(shared_array, updated_array, barrier_array, numCores, idCore);
 
         // Wait for all other cores to finish before going again
     }
@@ -196,7 +196,7 @@ void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updat
     }
 
     //When all children get done being made, parent will go to its barrier
-    parentBarrier(shared_array, updated_array, barrier_array, numCores);
+    //parentBarrier(shared_array, updated_array, barrier_array, numCores);
 
     //When parent gets here, reap the children, then exit function
     usleep(10000);
@@ -239,7 +239,7 @@ int main()
 
     char fileName[50];
     FILE *file;
-
+    FILE *outputFile;
     while (1)
     {
         printf("Enter name of the input file: ");
@@ -256,6 +256,24 @@ int main()
             printf("Invalid file name\n");
         }
     }
+
+    while (1)
+    {
+        printf("Enter name of the output file: ");
+        scanf("%s", fileName);
+
+        // Check to see if the file opens
+        outputFile = fopen(fileName, "w");
+        if (outputFile != NULL)
+        {
+            break;
+        }
+        else
+        {
+            printf("Invalid file name\n");
+        }
+    }
+
 
     // Check if the input number matches the number of elements in the file and write the elements into the array
     // Our array will have to be dynamic and grow based on size of input file
@@ -278,7 +296,7 @@ int main()
     int i;
     for (i = 0; i < numCores; i++)
     {
-        barrier[i] == 0;
+        barrier[i] = 0;
     }
 
 
@@ -286,9 +304,9 @@ int main()
     int *updated_array;
     int *barrier_array;
     // create a memory segment to be shared
-    int segment_idOne = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
-    int segment_idTwo = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
-    int segment_idThree = shmget(IPC_PRIVATE, MEMORY_SIZE, S_IRUSR | S_IWUSR);
+    int segment_idOne = shmget(IPC_PRIVATE, (inputArraySize * sizeof(int)), S_IRUSR | S_IWUSR);
+    int segment_idTwo = shmget(IPC_PRIVATE, (inputArraySize * sizeof(int)), S_IRUSR | S_IWUSR);
+    int segment_idThree = shmget(IPC_PRIVATE, (numCores * sizeof(int)), S_IRUSR | S_IWUSR);
     if (segment_idOne < 0 || segment_idTwo < 0 || segment_idThree < 0) 
         errormsg("ERROR in creating a shared memory segment\n");
 
@@ -310,18 +328,19 @@ int main()
 
     // If we reach here, we are ready to begin
     pid_t pidOfRoot = getpid();
-    printf("Parent PID: %d\n", pidOfRoot);
-    int j = 0;
-    for(j; j < inputArraySize; j++){
-        printf("%d\n", barrier[j]);
-    }
+    //printf("Parent PID: %d\n", pidOfRoot);
+
 
     // Spawn the processes
     spawnProcesses(numCores, pidOfRoot, shared_array, updated_array, barrier_array);
-    j = 0;
+
+    //Write to output file
+    int j = 0;
     for(j; j < inputArraySize; j++){
-        printf("%d\n", shared_array[j]);
+        fprintf(outputFile, "%d ", shared_array[j]);
     }
+
+
 
     // mark the shared memory segment for destruction
     shmdt(shared_array);
