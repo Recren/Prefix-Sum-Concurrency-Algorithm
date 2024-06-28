@@ -9,6 +9,7 @@
 
 int inputArraySize = 0;
 
+//Function to write values of input file into an array as well as check that the number of elements match what user specified
 int checkInputNumberMatches(FILE *file, int numElements, int **arr)
 {
     int numsInFile = 0;
@@ -69,6 +70,7 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
     return numsInFile;
 }
 
+//Allows children processes to wait until all other children processes have completed their portion of computation
 void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, int numCores, int idCore)
 {
 
@@ -130,6 +132,7 @@ void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, in
     }
 }
 
+//Allows child processes to perform the Hillis Steele Algorithm
 void compute(int idCore, int *shared_array, int numCores, int *updated_array, int *barrier_array)
 {
     int i;
@@ -186,6 +189,7 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
 
 }
 
+//Function that has the parent process create all the child processes the user specified
 void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updated_array, int *barrier_array, int childPIDS[])
 {
 
