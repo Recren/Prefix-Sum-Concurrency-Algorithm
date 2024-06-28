@@ -9,12 +9,6 @@
 
 int inputArraySize = 0;
 
-void errormsg(char *msg)
-{
-    perror(msg);
-    exit(1);
-}
-
 int checkInputNumberMatches(FILE *file, int numElements, int **arr)
 {
     int numsInFile = 0;
@@ -78,7 +72,7 @@ int checkInputNumberMatches(FILE *file, int numElements, int **arr)
 void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, int numCores, int idCore)
 {
 
-    // set spot in barrier to 1
+    // set spot in barrier to 1 to signify core is completed
     barrier_array[idCore] = 1;
 
     // Let our first core take care of barrier checking
@@ -101,11 +95,6 @@ void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, in
 
                 // Then, reset the barrier values to let children exit the loop and continue execution
                 int i = 0;
-                for (i; i < inputArraySize; i++)
-                {
-                    printf("%d\n", shared_array[i]);
-                }
-                printf("\n\n");
                 for (i = 0; i < numCores; i++)
                 {
                     barrier_array[i] = 0;
@@ -120,11 +109,7 @@ void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, in
             { // If current index value is 1, it means that child completed its work
                 currentIteration++;
             }
-            // If any value = 2, it means we are finished
-            else if (barrier_array[currentIteration] == 2)
-            {
-                break; // exit function
-            }
+            //If we detect any zero, start over
             else
             {
                 currentIteration = 0;
@@ -136,7 +121,7 @@ void arriveAndWait(int *shared_array, int *updated_array, int *barrier_array, in
     {
         while (1)
         {
-            // We will continue to loop until we get our barrier index set back to zero (it means core zero was in the process of resetting the array meaning we are good to go)
+            // We will continue to loop until we get our barrier index set back to zero (it means core zero was in the process of resetting the barrier array meaning we are good to go)
             if (barrier_array[idCore] == 0)
             {
                 break;
@@ -150,12 +135,9 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
     int i;
     // i*=2 to determine the space between neighbor
     for (i = 1; i < inputArraySize; i *= 2)
-    { // i will be 1, 2, 4, 8, 16, ...
+    {
         // inputArraySize - i will be the amount of computations needed to be done for the current iteration
-        // if numCores > (inputArraySize - i), then idCore >= (inputArraySize - i), then that core will drop out since the cores before it will only be used
-
-        // Check if we have less cores than computations
-
+  
         // If we have more cores then computations needed
         if (numCores >= (inputArraySize - i))
         {
@@ -175,27 +157,22 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
             int range = (inputArraySize - i) / numCores; // How many computations each core needs to do
 
             int carryOver = (inputArraySize - i) % numCores; // If the core id is less than the carryover, the core will need to do one more computation
-            // n = 9
-            // m = 3
-            // range = 2
-            // carryover = 2
-            // The core will need to do range + 1 computations
             int z;
+            //If the core needs to do plus 1 computations
             if (idCore < carryOver)
             {
-
                 for (z = 0; z < (range + 1); z++)
                 {
                     // Gets us to the right index       //adding idCore to ensure proper offset due to the values in front of it creating an offset of plus 1
                     updated_array[(idCore * (range)) + i + z + idCore] = shared_array[(idCore * (range)) + z + idCore] + shared_array[(idCore * (range)) + i + z + idCore];
                 }
             }
+            //If the core just needs to do standard range of computation
             else
             {
-
                 for (z = 0; z < (range); z++)
                 {
-                    // Gets us to the right index
+                    // Gets us to the right index               //add carryover in case of offset
                     updated_array[(idCore * (range)) + i + z + carryOver] = shared_array[(idCore * (range)) + z + carryOver] + shared_array[(idCore * (range)) + i + z + carryOver];
                 }
             }
@@ -206,8 +183,7 @@ void compute(int idCore, int *shared_array, int numCores, int *updated_array, in
         // Wait for all other cores to finish before going again
     }
     // If we are here, that means the child process has exited and completed its work
-    // Set to 2 to let parent know we are finished and then exit
-    barrier_array[idCore] = 2;
+
 }
 
 void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updated_array, int *barrier_array, int childPIDS[])
@@ -250,100 +226,70 @@ void spawnProcesses(int numCores, pid_t pidOfRoot, int *shared_array, int *updat
             {
                 // start the computation and assign it the index for its spot in the array
                 compute(i, shared_array, numCores, updated_array, barrier_array);
-                printf("core %d done\n", i);
-                exit(0);
+                exit(0);    //When child finishes, exit
             }
         }
     }
 
-    // When all children get done being made, parent will go to its barrier
-    // parentBarrier(shared_array, updated_array, barrier_array, numCores);
-
-    // When parent gets here, reap the children, then exit function
-    // usleep(10000);
 }
 
-int main()
+int main(int argc, char *argv[])
 {
 
-    // Must make sure value is greater than zero
-    int numElements;
-    while (1)
-    {
-        printf("Enter number of elements in the input array: ");
-        scanf("%d", &numElements);
-        if (numElements > 0)
-        {
-            break;
-        }
-        else
-        {
-            printf("Invalid number of elements, number must be greater than 0\n");
-        }
+    //Make sure we have correct number of arguments
+    if(argc != 5){
+        printf("Invalid number of arguments provided, arguments needed must be 4\n");
+        exit(1);
     }
 
-    int numCores;
-    while (1)
+    // Must make sure value is greater than zero
+    int numElements = atoi(argv[1]);
+    if (numElements <= 0)
     {
-        printf("Enter number of cores: ");
-        scanf("%d", &numCores);
+        printf("Invalid number of elements, number must be greater than 0\n");
+        exit(1);
+    }
 
-        if (numCores > 0)
-        {
-            break;
-        }
-        else
-        {
-            printf("Invalid number of cores, number must be even and greater than 0\n");
-        }
+    // Make sure number of cores is greater than zero
+    int numCores = atoi(argv[2]);
+    if (numCores <= 0)
+    {
+        printf("Invalid number of cores, number must greater than 0\n");
+        exit(1);
     }
 
     char fileName[50];
-    FILE *file;
+    FILE *inputFile;
     FILE *outputFile;
-    while (1)
-    {
-        printf("Enter name of the input file: ");
-        scanf("%s", fileName);
 
-        // Check to see if the file opens
-        file = fopen(fileName, "r");
-        if (file != NULL)
-        {
-            break;
-        }
-        else
-        {
-            printf("Invalid file name\n");
-        }
+    // Make sure input file is valid
+    strcpy(fileName, argv[3]);
+    inputFile = fopen(fileName, "r");
+    if (inputFile == NULL)
+    {
+        printf("Invalid input file name\n");
+        exit(1);
     }
 
-    while (1)
+    // Make sure output file is valid
+    strcpy(fileName, argv[4]);
+    outputFile = fopen(fileName, "w");
+    if (outputFile == NULL)
     {
-        printf("Enter name of the output file: ");
-        scanf("%s", fileName);
-
-        // Check to see if the file opens
-        outputFile = fopen(fileName, "w");
-        if (outputFile != NULL)
-        {
-            break;
-        }
-        else
-        {
-            printf("Invalid file name\n");
-        }
+        printf("Invalid output file name\n");
+        exit(1);
     }
+
 
     // Check if the input number matches the number of elements in the file and write the elements into the array
     // Our array will have to be dynamic and grow based on size of input file
     int *inputArray;
-    int numElementsInFile = checkInputNumberMatches(file, numElements, &inputArray);
+    int numElementsInFile = checkInputNumberMatches(inputFile, numElements, &inputArray);
 
-    // Exit program if we have invalid number of elements
+    // Exit program if we have invalid number of elements or something failed when allocating memory
     if (numElementsInFile == 0)
     {
-        return 1;
+        exit(1);
     }
     // If we have more cores then elements in the file, trim down the number of cores
     else if (numElementsInFile < numCores)
@@ -359,17 +305,18 @@ int main()
         barrier[i] = 0;
     }
 
-    int *shared_array;
-    int *updated_array;
-    int *barrier_array;
     // create a memory segment to be shared
     int segment_idOne = shmget(IPC_PRIVATE, (inputArraySize * sizeof(int)), S_IRUSR | S_IWUSR);
     int segment_idTwo = shmget(IPC_PRIVATE, (inputArraySize * sizeof(int)), S_IRUSR | S_IWUSR);
     int segment_idThree = shmget(IPC_PRIVATE, (numCores * sizeof(int)), S_IRUSR | S_IWUSR);
-    if (segment_idOne < 0 || segment_idTwo < 0 || segment_idThree < 0)
-        errormsg("ERROR in creating a shared memory segment\n");
+    if (segment_idOne < 0 || segment_idTwo < 0 || segment_idThree < 0){
+        printf("ERROR in creating a shared memory segment\n");
+        exit(1);
+    }
 
-    //    fprintf(stdout, "Segment id = %d\n", segment_id);
+    int *shared_array;
+    int *updated_array;
+    int *barrier_array;
 
     // copy our input array to the shared array
     shared_array = (int *)shmat(segment_idOne, NULL, 0);
@@ -386,23 +333,19 @@ int main()
     // If we reach here, we are ready to begin
     pid_t pidOfRoot = getpid();
     pid_t childPIDS[numCores];
-    // printf("Parent PID: %d\n", pidOfRoot);
+
 
     // Spawn the processes
     spawnProcesses(numCores, pidOfRoot, shared_array, updated_array, barrier_array, childPIDS);
 
-    // Parent process code to wait for all children to terminate
-    int status;
+    //If we are the parent process, wait for all the children to finish
+     if(pidOfRoot == getpid()){
+         for (i = 0; i < numCores; i++) {
+             wait(NULL);
+         }
+         printf("All child processes have exited\n");
+    }
 
-    // If we are the parent process, wait for all the children to finish
-    //  if(pidOfRoot == getpid()){
-    //      for (i = 0; i < numCores; i++) {
-    //          wait(NULL);
-    //      }
-    //      printf("All child processes have exited\n");
-
-    // }
-    usleep(100000);
     // Write to output file
     int j = 0;
     for (j; j < inputArraySize; j++)
